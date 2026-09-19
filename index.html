@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Mirror</title>
+<style>
+  body{margin:0;padding:24px;font-family:system-ui,sans-serif;background:#0f1420;color:#e8ecf4;display:flex;flex-direction:column;align-items:center}
+  canvas{width:100%;max-width:480px;height:160px;background:#171d2c;border-radius:12px}
+  button{margin:20px 0;padding:14px 36px;font-size:1rem;border:0;border-radius:999px;background:#4f8cff;color:#fff}
+  #status{opacity:.7}
+</style>
+</head>
+<body>
+<h1>Voice Mirror</h1>
+<canvas id="wave"></canvas>
+<button id="btn">Start</button>
+<div id="status">Tap Start and allow the microphone</div>
+<script>
+const btn = document.getElementById('btn'),
+      status = document.getElementById('status'),
+      cv = document.getElementById('wave'),
+      g = cv.getContext('2d');
+let audioCtx, analyser, stream, buf, running = false;
+
+cv.width = cv.clientWidth * devicePixelRatio;
+cv.height = cv.clientHeight * devicePixelRatio;
+
+async function start() {
+  try {
+    // Filters off: they distort jitter/shimmer, which we need raw
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+    });
+  } catch (e) { status.textContent = 'Mic error: ' + e.name; return; }
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  await audioCtx.resume();
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 2048;
+  audioCtx.createMediaStreamSource(stream).connect(analyser);
+  buf = new Float32Array(analyser.fftSize);
+  running = true;
+  btn.textContent = 'Stop';
+  draw();
+}
+
+function stop() {
+  running = false;
+  stream.getTracks().forEach(t => t.stop());
+  audioCtx.close();
+  btn.textContent = 'Start';
+  status.textContent = 'Stopped';
+}
+
+function draw() {
+  if (!running) return;
+  analyser.getFloatTimeDomainData(buf);
+  let sum = 0;
+  for (const v of buf) sum += v * v;
+  status.textContent = 'Level: ' + Math.sqrt(sum / buf.length).toFixed(3);
+  g.clearRect(0, 0, cv.width, cv.height);
+  g.strokeStyle = '#4f8cff';
+  g.lineWidth = 2 * devicePixelRatio;
+  g.beginPath();
+  buf.forEach((v, i) => {
+    const x = i / buf.length * cv.width, y = cv.height / 2 - v * cv.height * 2;
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  });
+  g.stroke();
+  requestAnimationFrame(draw);
+}
+
+btn.onclick = () => running ? stop() : start();
+</script>
+</body>
+</html>
