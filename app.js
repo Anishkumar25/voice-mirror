@@ -121,7 +121,7 @@
     setTimeout(() => {
       let res;
       try { res = DSP.analyzeAudio(x, sr); } catch { res = { ok: false, reason: 'error' }; }
-      if (!res.ok) return retry(res.reason);
+      if (!res.ok) return retry(res.reason, res.d);
       const all = store.get(), m = res.m;
       const s = { t: Date.now(), tension: res.tension, low: res.low, m: { jitter: +m.jitter.toFixed(2), shimmer: +m.shimmer.toFixed(2), pitchSD: +m.pitchSD.toFixed(2), pause: +m.pauseRatio.toFixed(2), rate: +m.rate.toFixed(2) } };
       store.set(all.concat(s));
@@ -129,11 +129,12 @@
     }, 60);
   }
 
-  function retry(reason) {
-    const msg = reason === 'unvoiced' ? 'I did not catch enough clear speech. Speak normally for the full time and try again.'
+  function retry(reason, d) {
+    const msg = reason === 'noisy' ? 'There was too much background noise to read your voice. Find a quieter spot and try again.'
+      : reason === 'unvoiced' ? 'I did not catch enough clear speech. Speak normally for the full time and try again.'
       : reason === 'error' ? 'Something went wrong while analysing. Please try again.'
       : 'I could barely hear you. Move a little closer or find a quieter spot, then try again.';
-    $('result').innerHTML = `<h2>Let's try that again</h2><p class="lead">${msg}</p><button class="primary" data-act="start">Try again</button>`;
+    $('result').innerHTML = `<h2>Let's try that again</h2><p class="lead">${msg}</p><button class="primary" data-act="start">Try again</button>${d ? `<p class="note">Debug: loudness ${d.level}, voiced ${d.voiced ?? 0} s, cycles ${d.cycles ?? 0}</p>` : ''}`;
   }
 
   // ---------- result ----------
@@ -163,6 +164,7 @@
       ['Voiced time', m.voicedSec.toFixed(0) + ' s'], ['Cycles analysed', m.cycles]];
     $('result').innerHTML = `<h2 class="verdict">${head}</h2><p class="say">${say}</p>
       ${meter('Tension', s.tension, 'var(--tense)', 'tension', prior)}${meter('Low energy', s.low, 'var(--low)', 'low', prior)}
+      ${m.approx ? '<p class="note">Voice steadiness was hard to measure this time, so tension is a rougher estimate. A quieter room helps.</p>' : ''}
       <p class="tip">${tip}</p>
       ${needHelp(prior.concat(s)) ? helpCard : ''}
       <details><summary>See the numbers</summary><dl>${rows.map(r => `<dt>${r[0]}</dt><dd>${r[1]}</dd>`).join('')}</dl></details>

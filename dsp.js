@@ -49,7 +49,7 @@
   }
 
   // Cycle-to-cycle jitter and shimmer inside voiced runs, tracking one glottal period at a time.
-  function cycles(x, sr, frames, hopS, W) {
+  function cycles(x, sr, frames, hopS, W, minC) {
     const dT = [], dA = [], Ts = [], As = [];
     const F = frames.length;
     for (let i = 0; i < F;) {
@@ -61,7 +61,7 @@
         while (p < end) {
           const k = Math.min(j - 1, Math.max(i, Math.round((p - (W >> 1)) / hopS)));
           const guess = prevT || sr / frames[k].f0, T = Math.round(guess);
-          const lo = Math.floor(guess * 0.9), hi = Math.ceil(guess * 1.1);
+          const lo = Math.floor(guess * 0.88), hi = Math.ceil(guess * 1.12);
           if (p + hi + T + 2 >= x.length) break;
           let ea = 0; for (let n = 0; n < T; n++) ea += x[p + n] * x[p + n];
           const c = new Float64Array(hi + 2); let bl = 0, bc = -1, eb = 0;
@@ -72,7 +72,7 @@
             c[L] = num / Math.sqrt(ea * eb + 1e-12);
             if (c[L] > bc) { bc = c[L]; bl = L; }
           }
-          if (bc < 0.8 || bl <= lo || bl >= hi) { prevT = 0; p += Math.round(guess); continue; }
+          if (bc < minC || bl <= lo || bl >= hi) { prevT = 0; p += Math.round(guess); continue; }
           const a = c[bl - 1], b = c[bl], d = c[bl + 1], q = a - 2 * b + d;
           const s = bl + (q ? (0.5 * (a - d)) / q : 0);
           let mx = -1, mn = 1; for (let n = 0; n < T; n++) { const v = x[p + n]; if (v > mx) mx = v; if (v < mn) mn = v; }
@@ -84,23 +84,28 @@
       }
       i = j;
     }
+    if (!dT.length) return { n: 0, jitter: 0, shimmer: 0 };
     return { n: dT.length, jitter: (trimmed(dT) / mean(Ts)) * 100, shimmer: (trimmed(dA) / mean(As)) * 100 };
   }
 
-  function analyzeAudio(x, sr) {
-    const W = 2048, hopS = Math.round(0.02 * sr), hop = hopS / sr, frames = [];
+  function analyzeAudio(raw, sr) {
+    // Phones with auto-gain off can be very quiet, so scale so the loud parts peak near 0.3.
+    const mags = []; for (let i = 0; i < raw.length; i += 16) mags.push(Math.abs(raw[i]));
+    const level = pct(mags, 0.99), g = Math.min(300, 0.3 / Math.max(level, 1e-6));
+    const x = new Float32Array(raw.length); for (let i = 0; i < raw.length; i++) x[i] = raw[i] * g;
+    const W = 2048, hopS = Math.round(0.02 * sr), hop = hopS / sr, frames = [], d = { level: +level.toFixed(4) };
     for (let s = 0; s + W <= x.length; s += hopS) {
       const w = x.subarray(s, s + W), r = rms(w); let f0 = 0;
-      if (r > 0.004) { const p = pitch(w, sr); if (p.conf >= 0.6) f0 = p.f0; }
+      if (r > 0.004) { const p = pitch(w, sr); if (p.conf >= 0.45) f0 = p.f0; }
       frames.push({ rms: r, f0 });
     }
-    if (frames.length < 100) return { ok: false, reason: 'short' };
+    if (frames.length < 100) return { ok: false, reason: 'short', d };
     const all = frames.map(f => f.rms);
     const thr = Math.max(pct(all, 0.1) * 2.5, pct(all, 0.95) * 0.12, 0.004);
     const sp = all.map(v => v > thr);
     frames.forEach((f, i) => { if (!sp[i]) f.f0 = 0; });
     const first = sp.indexOf(true), last = sp.lastIndexOf(true);
-    if (first < 0 || (last - first) * hop < 4) return { ok: false, reason: 'quiet' };
+    if (first < 0 || (last - first) * hop < 4) return { ok: false, reason: 'quiet', d };
     const seg = frames.slice(first, last + 1), s = sp.slice(first, last + 1), dur = seg.length * hop;
 
     const pauses = []; let run = 0;
@@ -108,11 +113,18 @@
     const pauseRatio = (s.filter(on => !on).length * hop) / dur;
 
     const f0s = seg.filter(f => f.f0 > 0).map(f => f.f0), voicedSec = f0s.length * hop;
-    if (voicedSec < 3) return { ok: false, reason: 'unvoiced' };
+    d.voiced = +voicedSec.toFixed(1);
+    if (voicedSec < 2) return { ok: false, reason: 'unvoiced', d };
     const pitchMean = pct(f0s, 0.5), pitchSD = sd(f0s.map(f => 12 * Math.log2(f / pitchMean)));
 
-    const cy = cycles(x, sr, frames, hopS, W);
-    if (cy.n < 40) return { ok: false, reason: 'unvoiced' };
+    // Low-pass a copy (noise and formant ringing make cycles look different), then track periods.
+    const a = 1 - Math.exp((-2 * Math.PI * 1200) / sr), xl = new Float32Array(x.length);
+    for (let i = 1; i < x.length; i++) xl[i] = xl[i - 1] + a * (x[i] - xl[i - 1]);
+    let cy = cycles(xl, sr, frames, hopS, W, 0.7);
+    if (cy.n < 25) cy = cycles(xl, sr, frames, hopS, W, 0.5);
+    d.cycles = cy.n;
+    const approx = cy.n < 25; // steadiness could not be measured cleanly: still give a rougher reading
+    if (approx && voicedSec / dur < 0.35) return { ok: false, reason: 'noisy', d };
 
     const sm = seg.map((_, i) => mean(seg.slice(Math.max(0, i - 2), i + 3).map(f => f.rms)));
     const gap = Math.max(1, Math.round(0.12 / hop));
@@ -122,11 +134,11 @@
     }
     const rate = peaks / dur;
 
-    const tension = mean([scale(cy.jitter, RANGES.jitter), scale(cy.shimmer, RANGES.shimmer), scale(rate, RANGES.fast)]);
+    const tension = approx ? scale(rate, RANGES.fast) : mean([scale(cy.jitter, RANGES.jitter), scale(cy.shimmer, RANGES.shimmer), scale(rate, RANGES.fast)]);
     const low = mean([100 - scale(pitchSD, RANGES.flat), scale(pauseRatio, RANGES.pause), 100 - scale(rate, RANGES.slow)]);
     return {
       ok: true, tension: Math.round(tension), low: Math.round(low),
-      m: { dur, voicedSec, pitchMean, pitchSD, jitter: cy.jitter, shimmer: cy.shimmer, cycles: cy.n, pauseRatio, pauses: pauses.length, rate }
+      m: { dur, voicedSec, pitchMean, pitchSD, jitter: cy.jitter, shimmer: cy.shimmer, cycles: cy.n, approx, pauseRatio, pauses: pauses.length, rate }
     };
   }
 
