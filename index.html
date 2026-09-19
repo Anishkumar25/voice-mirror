@@ -2,75 +2,60 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Voice Mirror</title>
-<style>
-  body{margin:0;padding:24px;font-family:system-ui,sans-serif;background:#0f1420;color:#e8ecf4;display:flex;flex-direction:column;align-items:center}
-  canvas{width:100%;max-width:480px;height:160px;background:#171d2c;border-radius:12px}
-  button{margin:20px 0;padding:14px 36px;font-size:1rem;border:0;border-radius:999px;background:#4f8cff;color:#fff}
-  #status{opacity:.7}
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#e9eef6">
+<meta name="description" content="Aaina: a private 30-second voice check-in that reflects tension and low energy in how you sound.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+<title>Aaina</title>
 </head>
 <body>
-<h1>Voice Mirror</h1>
-<canvas id="wave"></canvas>
-<button id="btn">Start</button>
-<div id="status">Tap Start and allow the microphone</div>
-<script>
-const btn = document.getElementById('btn'),
-      status = document.getElementById('status'),
-      cv = document.getElementById('wave'),
-      g = cv.getContext('2d');
-let audioCtx, analyser, stream, buf, running = false;
+<main>
+  <section id="home">
+    <div class="mirror" aria-hidden="true"><i></i></div>
+    <h1>Aaina</h1>
+    <p class="lead">Talk for 30 seconds. Aaina shows you how your voice sounds today: tense, tired, or steady.</p>
+    <button class="primary" data-act="start">Start check-in</button>
+    <p class="err" id="err" role="alert"></p>
+    <p class="note">Find a quiet spot and hold your phone at normal distance. Your voice is analysed on this phone. Audio is never saved or sent anywhere. Only a few numbers are kept.</p>
+  </section>
 
-cv.width = cv.clientWidth * devicePixelRatio;
-cv.height = cv.clientHeight * devicePixelRatio;
+  <section id="rec" hidden>
+    <canvas id="orb"></canvas>
+    <p id="prompt" class="prompt"></p>
+    <div class="track"><b id="bar"></b></div>
+    <p id="timer" class="timer">30</p>
+    <p id="hint" class="note"></p>
+    <div class="row">
+      <button class="ghost" data-act="cancel">Cancel</button>
+      <button class="primary" data-act="stop">Done</button>
+    </div>
+  </section>
 
-async function start() {
-  try {
-    // Filters off: they distort jitter/shimmer, which we need raw
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-    });
-  } catch (e) { status.textContent = 'Mic error: ' + e.name; return; }
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  await audioCtx.resume();
-  analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 2048;
-  audioCtx.createMediaStreamSource(stream).connect(analyser);
-  buf = new Float32Array(analyser.fftSize);
-  running = true;
-  btn.textContent = 'Stop';
-  draw();
-}
+  <section id="result" hidden></section>
 
-function stop() {
-  running = false;
-  stream.getTracks().forEach(t => t.stop());
-  audioCtx.close();
-  btn.textContent = 'Start';
-  status.textContent = 'Stopped';
-}
+  <section id="trends" hidden>
+    <h2>Your week</h2>
+    <p id="empty" class="lead" hidden>No check-ins yet. Your first one takes 30 seconds.</p>
+    <div id="chart"></div>
+    <ul id="list"></ul>
+    <div id="helpT"></div>
+    <div class="row small">
+      <button class="ghost" data-act="demo">Load demo week</button>
+      <button class="ghost" data-act="clear">Clear my data</button>
+    </div>
+  </section>
+</main>
 
-function draw() {
-  if (!running) return;
-  analyser.getFloatTimeDomainData(buf);
-  let sum = 0;
-  for (const v of buf) sum += v * v;
-  status.textContent = 'Level: ' + Math.sqrt(sum / buf.length).toFixed(3);
-  g.clearRect(0, 0, cv.width, cv.height);
-  g.strokeStyle = '#4f8cff';
-  g.lineWidth = 2 * devicePixelRatio;
-  g.beginPath();
-  buf.forEach((v, i) => {
-    const x = i / buf.length * cv.width, y = cv.height / 2 - v * cv.height * 2;
-    i ? g.lineTo(x, y) : g.moveTo(x, y);
-  });
-  g.stroke();
-  requestAnimationFrame(draw);
-}
+<nav>
+  <button data-act="home" data-v="home" class="on">Check-in</button>
+  <button data-act="trends" data-v="trends">Trends</button>
+</nav>
+<p class="foot">Aaina is a wellness tool, not a medical device. It cannot diagnose anything.</p>
 
-btn.onclick = () => running ? stop() : start();
-</script>
+<script src="dsp.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
